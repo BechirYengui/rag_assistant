@@ -1,0 +1,25 @@
+# Web framework
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+
+# Config / validation
+pydantic>=2.7
+pydantic-settings>=2.3
+
+# Database (async) + pgvector
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29
+pgvector>=0.3
+
+# Embeddings (default: local)
+fastembed>=0.3
+
+# LLM
+anthropic>=0.40
+
+# Ingestion
+pypdf>=4.2
+
+# Optional hosted embeddings (uncomment to use EMBEDDING_PROVIDER=voyage)
+# voyageai>=0.2

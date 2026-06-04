@@ -1,0 +1,17 @@
+[project]
+name = "rag-assistant"
+version = "0.1.0"
+description = "Retrieval-augmented Q&A over a document corpus, powered by Claude."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
