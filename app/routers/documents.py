@@ -38,7 +38,7 @@ async def ingest_text(
 ) -> IngestResponse:
     """Ingest a raw-text document into the knowledge base."""
     try:
-        document, created = await ingest_document(
+        document, created, is_new = await ingest_document(
             session,
             content=payload.content,
             source=payload.source,
@@ -49,7 +49,8 @@ async def ingest_text(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return IngestResponse(
         document=await _to_document_response(session, document),
-        chunks_created=created,
+        chunks_created=created if is_new else 0,
+        deduplicated=not is_new,
     )
 
 
@@ -76,7 +77,7 @@ async def ingest_file(
         )
 
     try:
-        document, created = await ingest_document(
+        document, created, is_new = await ingest_document(
             session,
             content=content,
             source=name,
@@ -87,7 +88,8 @@ async def ingest_file(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     return IngestResponse(
         document=await _to_document_response(session, document),
-        chunks_created=created,
+        chunks_created=created if is_new else 0,
+        deduplicated=not is_new,
     )
 
 

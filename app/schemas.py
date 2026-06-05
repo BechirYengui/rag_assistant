@@ -28,6 +28,9 @@ class DocumentResponse(BaseModel):
 class IngestResponse(BaseModel):
     document: DocumentResponse
     chunks_created: int
+    # True when the content was already indexed: nothing new was embedded or
+    # stored, and the existing document is returned.
+    deduplicated: bool = False
 
 
 # Query

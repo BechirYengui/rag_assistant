@@ -33,6 +33,11 @@ class Document(Base):
     )
     source: Mapped[str] = mapped_column(String(1024), nullable=False)
     title: Mapped[str | None] = mapped_column(String(512))
+    # SHA-256 of the normalised content. Unique so the same document is never
+    # embedded and stored twice (idempotent ingestion).
+    content_hash: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
     doc_metadata: Mapped[dict] = mapped_column(
         "metadata", JSONB, nullable=False, default=dict
     )

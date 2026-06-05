@@ -38,13 +38,16 @@ async def main(paths: list[str]) -> None:
                 print(f"skip (empty): {path}")
                 continue
             async with session_scope() as session:
-                _, count = await ingest_document(
+                _, count, is_new = await ingest_document(
                     session,
                     content=content,
                     source=str(path),
                     title=path.stem,
                 )
-            print(f"ingested {path} -> {count} chunks")
+            if is_new:
+                print(f"ingested {path} -> {count} chunks")
+            else:
+                print(f"skip (already indexed): {path}")
     finally:
         await dispose_db()
 

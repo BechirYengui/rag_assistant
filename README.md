@@ -36,10 +36,14 @@ génération des réponses.
 - Génération d'embeddings via un modèle local (aucune clé requise) ou Voyage AI.
 - Stockage et recherche des vecteurs dans PostgreSQL grâce à l'extension
   pgvector, avec un index ANN de type HNSW.
+- Reranking MMR des résultats pour diversifier le contexte et écarter les
+  passages quasi identiques.
+- Ingestion idempotente : un document au contenu identique n'est pas réindexé.
 - Réponses générées par Claude, accompagnées des sources utilisées et de leur
   score de similarité, pour une traçabilité complète.
 - Réponse classique en JSON ou réponse en streaming (Server-Sent Events).
-- Configuration entièrement pilotée par variables d'environnement.
+- Maîtrise du coût en tokens (budget de contexte, cache de réponses, suivi de
+  l'usage) et configuration entièrement pilotée par variables d'environnement.
 
 
 ## 2. Architecture
@@ -154,6 +158,9 @@ fichier `.env`). Les principales :
 | CHUNK_OVERLAP | 150 | Recouvrement entre chunks (caractères) |
 | RETRIEVAL_TOP_K | 5 | Nombre de chunks récupérés par question |
 | RETRIEVAL_MIN_SIMILARITY | 0.2 | Seuil de similarité minimal |
+| RERANK | mmr | Reranking des résultats (mmr ou none) |
+| MMR_LAMBDA | 0.5 | Arbitrage MMR pertinence/diversité (1 = pertinence pure) |
+| RERANK_FETCH_MULTIPLIER | 4 | Taille du vivier de candidats avant reranking (x top_k) |
 
 Attention : `EMBEDDING_DIM` doit correspondre à la dimension réelle du modèle
 d'embeddings, car c'est la largeur de la colonne vectorielle en base. Le modèle
@@ -270,10 +277,25 @@ entre un modèle local (fastembed, basé sur ONNX, sans clé) et Voyage AI
 qui permet de charger le reste de l'application et de lancer les tests sans
 installer ces dépendances.
 
+Ingestion idempotente. Avant tout calcul, on prend l'empreinte SHA-256 du
+contenu normalisé. Si un document identique a déjà été indexé, on renvoie
+l'existant sans recalculer les embeddings ni créer de doublon. Réimporter le
+même fichier ne coûte donc rien et ne pollue pas la base.
+
 Recherche. La question est transformée en vecteur, puis pgvector récupère les
 chunks les plus proches au sens de la distance cosinus, via l'index HNSW. La
 similarité est calculée comme un moins la distance, et les résultats sous le
 seuil minimal sont écartés.
+
+Reranking MMR. La recherche par plus proches voisins tend à remonter des
+passages qui se ressemblent tous (la même information formulée plusieurs fois),
+ce qui gaspille des tokens et réduit la couverture. On récupère donc un vivier
+plus large (top_k multiplié par RERANK_FETCH_MULTIPLIER), puis l'algorithme
+Maximal Marginal Relevance sélectionne un sous-ensemble à la fois pertinent
+pour la question et diversifié. Le score d'un candidat est
+MMR_LAMBDA fois sa pertinence moins (1 moins MMR_LAMBDA) fois sa ressemblance
+maximale avec les passages déjà retenus. Le calcul est en Python pur, sans
+dépendance, et le vivier est borné par RERANK_MAX_POOL.
 
 Génération. Les chunks retenus sont assemblés en un bloc de contexte numéroté.
 Le prompt système impose à Claude de ne répondre qu'à partir de ce contexte, de
@@ -362,10 +384,12 @@ Réglages rapides selon le besoin :
 make test
 ```
 
-Les tests du découpage, du pipeline (formatage du contexte, attribution des
-citations, validation des requêtes, endpoint /health) et de l'optimisation des
-tokens (budget de contexte, cache de réponses) s'exécutent sans base PostgreSQL
-ni clé Claude, grâce à des doublures et au transport ASGI en mémoire.
+Les tests couvrent le découpage, le pipeline (formatage du contexte,
+attribution des citations, validation des requêtes, endpoint /health),
+l'optimisation des tokens (budget de contexte, cache de réponses) et le
+reranking (sélection MMR, empreinte d'ingestion). Ils s'exécutent sans base
+PostgreSQL ni clé Claude, grâce à des doublures et au transport ASGI en
+mémoire.
 
 
 ## 12. Dépannage
@@ -378,12 +402,17 @@ ni clé Claude, grâce à des doublures et au transport ASGI en mémoire.
   est lancé.
 - Le premier appel est lent : au premier usage, le modèle d'embeddings local est
   téléchargé puis mis en cache.
+- Colonne content_hash absente sur une base déjà créée avant cette version : le
+  schéma est créé au démarrage mais les colonnes ajoutées ne sont pas
+  rétro-appliquées. Recréer la base (docker compose down -v puis up) ou ajouter
+  la colonne à la main. Pour un suivi propre des évolutions de schéma, voir les
+  pistes d'amélioration.
 
 
 ## 13. Pistes d'amélioration
 
-- Reranking des chunks récupérés avant génération.
-- Recherche hybride (lexicale et vectorielle).
+- Recherche hybride (lexicale et vectorielle) combinée au reranking MMR.
+- Migrations de schéma versionnées (Alembic) au lieu de la création au démarrage.
+- Cache de réponses partagé (Redis) pour un déploiement multi worker.
 - Authentification et quotas par utilisateur.
-- Cache des réponses fréquentes.
-- Jeu d'évaluation pour mesurer la qualité des réponses.
+- Jeu d'évaluation pour mesurer la qualité des réponses et régler MMR_LAMBDA.

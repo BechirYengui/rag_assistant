@@ -23,6 +23,9 @@ class RetrievedChunk:
     chunk_index: int
     content: str
     similarity: float
+    # Carried only between the vector search and the reranker; cleared before
+    # the chunk leaves this module (never serialised to the API).
+    embedding: list[float] | None = None
 
 
 async def retrieve(
@@ -44,25 +47,34 @@ async def retrieve(
     provider = get_embedding_provider()
     query_vec = await provider.embed_query(question)
 
+    # When reranking, pull a larger candidate pool so MMR has room to trade
+    # relevance for diversity; otherwise fetch exactly what we return.
+    reranking = settings.rerank == "mmr"
+    pool = (
+        min(k * settings.rerank_fetch_multiplier, settings.rerank_max_pool)
+        if reranking
+        else k
+    )
+
     # pgvector cosine_distance is in [0, 2]; similarity = 1 - distance.
     distance = Chunk.embedding.cosine_distance(query_vec).label("distance")
     stmt = (
         select(Chunk, Document, distance)
         .join(Document, Chunk.document_id == Document.id)
         .order_by(distance)
-        .limit(k)
+        .limit(pool)
     )
     if document_ids:
         stmt = stmt.where(Chunk.document_id.in_(document_ids))
 
     rows = (await session.execute(stmt)).all()
 
-    results: list[RetrievedChunk] = []
+    candidates: list[RetrievedChunk] = []
     for chunk, document, dist in rows:
         similarity = 1.0 - float(dist)
         if similarity < floor:
             continue
-        results.append(
+        candidates.append(
             RetrievedChunk(
                 chunk_id=chunk.id,
                 document_id=document.id,
@@ -71,8 +83,20 @@ async def retrieve(
                 chunk_index=chunk.chunk_index,
                 content=chunk.content,
                 similarity=round(similarity, 4),
+                embedding=list(chunk.embedding) if reranking else None,
             )
         )
+
+    if reranking and len(candidates) > k:
+        from app.rerank import mmr_select
+
+        results = mmr_select(candidates, k, settings.mmr_lambda)
+    else:
+        results = candidates[:k]
+
+    # Drop embeddings: they are heavy and never leave this module.
+    for chunk in results:
+        chunk.embedding = None
     return results
 
 

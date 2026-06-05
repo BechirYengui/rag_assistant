@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     # Cosine similarity floor [0, 1]; chunks below this are dropped.
     retrieval_min_similarity: float = 0.2
 
+    # Reranking
+    # "mmr" diversifies the retrieved set (Maximal Marginal Relevance), which
+    # cuts near-duplicate chunks, improves coverage and saves context tokens.
+    # "none" keeps the raw nearest-neighbour order.
+    rerank: Literal["mmr", "none"] = "mmr"
+    # Candidate pool fetched before reranking, as a multiple of top_k.
+    rerank_fetch_multiplier: int = 4
+    # Hard cap on the candidate pool so a large top_k cannot blow up the query.
+    rerank_max_pool: int = 50
+    # MMR trade-off in [0, 1]: 1.0 = pure relevance, 0.0 = pure diversity.
+    mmr_lambda: float = 0.5
+
     # LLM
     anthropic_api_key: str | None = None
     llm_model: str = "claude-opus-4-8"
