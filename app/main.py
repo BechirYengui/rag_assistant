@@ -41,4 +41,8 @@ async def health() -> dict:
         "embedding_provider": settings.embedding_provider,
         "embedding_dim": settings.embedding_dim,
         "llm_model": settings.llm_model,
+        "llm_effort": settings.llm_effort,
+        "llm_thinking": settings.llm_thinking,
+        "max_context_tokens": settings.max_context_tokens,
+        "answer_cache_size": settings.answer_cache_size,
     }

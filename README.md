@@ -22,9 +22,10 @@ génération des réponses.
 7. Lancement
 8. Utilisation de l'API
 9. Fonctionnement interne
-10. Tests
-11. Dépannage
-12. Pistes d'amélioration
+10. Optimisation des tokens Claude
+11. Tests
+12. Dépannage
+13. Pistes d'amélioration
 
 
 ## 1. Fonctionnalités
@@ -140,7 +141,11 @@ fichier `.env`). Les principales :
 |---|---|---|
 | ANTHROPIC_API_KEY | (vide) | Clé API Claude, requise pour /query |
 | LLM_MODEL | claude-opus-4-8 | Modèle utilisé pour la génération |
-| LLM_EFFORT | high | Profondeur de raisonnement (low, medium, high, max) |
+| LLM_EFFORT | low | Profondeur de raisonnement (low, medium, high, max) |
+| LLM_THINKING | disabled | disabled (le moins cher) ou adaptive |
+| LLM_MAX_TOKENS | 1024 | Longueur maximale de la réponse |
+| MAX_CONTEXT_TOKENS | 1200 | Plafond du contexte envoyé à Claude (tokens estimés) |
+| ANSWER_CACHE_SIZE | 256 | Taille du cache de réponses (0 pour désactiver) |
 | DATABASE_URL | postgresql+asyncpg://rag:rag@localhost:5432/rag | URL de la base |
 | EMBEDDING_PROVIDER | fastembed | fastembed (local) ou voyage (hébergé) |
 | EMBEDDING_MODEL | BAAI/bge-small-en-v1.5 | Modèle d'embeddings |
@@ -238,12 +243,16 @@ Exemple de réponse :
       "content": "..."
     }
   ],
-  "model": "claude-opus-4-8"
+  "model": "claude-opus-4-8",
+  "usage": { "input_tokens": 312, "output_tokens": 28, "cache_read_input_tokens": 0 },
+  "cached": false
 }
 ```
 
 Le marqueur [1] dans la réponse renvoie directement à la source numéro 1 de la
-liste, ce qui rend chaque affirmation vérifiable.
+liste, ce qui rend chaque affirmation vérifiable. Le bloc usage indique le coût
+en tokens de l'appel (voir section 10), et cached vaut true si la réponse vient
+du cache (zéro token).
 
 
 ## 9. Fonctionnement interne
@@ -269,27 +278,97 @@ seuil minimal sont écartés.
 Génération. Les chunks retenus sont assemblés en un bloc de contexte numéroté.
 Le prompt système impose à Claude de ne répondre qu'à partir de ce contexte, de
 citer chaque affirmation avec un marqueur entre crochets, et d'indiquer
-clairement lorsqu'il n'a pas l'information plutôt que d'inventer. La génération
-utilise le mode adaptive thinking, le paramètre effort et le streaming.
+clairement lorsqu'il n'a pas l'information plutôt que d'inventer. Le mode de
+raisonnement (thinking), le paramètre effort et la taille de réponse sont
+réglables pour arbitrer entre qualité et coût en tokens (voir section 10).
 
 Robustesse. L'ingestion d'un document et de ses chunks se fait dans une seule
 transaction : en cas d'erreur, rien n'est indexé partiellement. Le schéma de la
 base (extension, tables, index) est créé automatiquement au démarrage.
 
 
-## 10. Tests
+## 10. Optimisation des tokens Claude
+
+Sur un système RAG, le coût Claude vient de trois postes : le prompt système,
+le contexte récupéré (les chunks, c'est le plus gros et le plus variable), et la
+réponse générée (texte plus éventuels tokens de raisonnement). Plusieurs leviers
+sont intégrés pour réduire ce coût, et tous sont réglables par variables
+d'environnement.
+
+1. Raisonnement désactivé par défaut (LLM_THINKING=disabled). Pour une réponse
+   extractive à partir d'un contexte fourni, le raisonnement étendu est souvent
+   superflu. Le désactiver supprime entièrement les tokens de thinking. Une
+   consigne « réponds uniquement par la réponse finale » est ajoutée au prompt
+   système dans ce mode, pour éviter que le modèle ne déverse son raisonnement
+   dans la réponse visible. Pour un corpus plus difficile, passer à
+   LLM_THINKING=adaptive (meilleure qualité, plus de tokens).
+
+2. Effort bas par défaut (LLM_EFFORT=low). Le paramètre effort règle la
+   profondeur de raisonnement et la verbosité. « low » convient au Q&A
+   extractif ; « high » ou « max » se réservent aux questions complexes.
+
+3. Budget de contexte (MAX_CONTEXT_TOKENS, défaut 1200). Avant l'appel à Claude,
+   les chunks sont ajoutés par ordre de pertinence décroissante jusqu'à
+   atteindre ce plafond, puis on s'arrête. Le coût en tokens d'entrée est donc
+   borné quel que soit top_k. Le chunk le plus pertinent est toujours conservé,
+   pour ne jamais répondre avec un contexte vide. L'estimation du nombre de
+   tokens se fait par une heuristique (caractères / 4) afin de ne pas dépenser
+   un appel réseau juste pour mesurer.
+
+4. Plafond de réponse (LLM_MAX_TOKENS, défaut 1024). Borne dure sur la longueur
+   de la réponse : les réponses RAG sont courtes, inutile de prévoir large.
+
+5. Cache de réponses (ANSWER_CACHE_SIZE, défaut 256). Un cache LRU en mémoire,
+   indexé par (question, chunks récupérés, configuration du modèle), renvoie la
+   réponse déjà calculée sans appeler Claude. Une question identique reposée
+   coûte alors zéro token. Mettre 0 pour le désactiver. En production multi
+   worker, remplacer par un cache partagé (Redis) derrière la même interface.
+
+6. Mesure du coût. Chaque réponse de l'API expose un objet usage
+   (input_tokens, output_tokens, cache_read_input_tokens) et un booléen cached.
+   Le coût est aussi journalisé côté serveur. On peut ainsi vérifier l'effet de
+   chaque réglage plutôt que de l'estimer.
+
+Remarque sur le prompt caching. Le cache de prompt côté API ne réécrit que les
+préfixes stables et volumineux (au moins 4096 tokens sur Opus). Ici le prompt
+système est court et le contexte change à chaque question : il n'y a quasiment
+pas de préfixe réutilisable, donc le prompt caching apporte peu. Le cache de
+réponses applicatif (point 5) est le mécanisme pertinent pour ce cas d'usage.
+
+Exemple de réponse, avec le bloc usage :
+
+```json
+{
+  "answer": "Pour la similarite cosinus, utilisez <=> [1].",
+  "sources": [ ... ],
+  "model": "claude-opus-4-8",
+  "usage": { "input_tokens": 312, "output_tokens": 28, "cache_read_input_tokens": 0 },
+  "cached": false
+}
+```
+
+Réglages rapides selon le besoin :
+
+| Objectif | Réglage |
+|---|---|
+| Coût minimal | LLM_THINKING=disabled, LLM_EFFORT=low, MAX_CONTEXT_TOKENS bas |
+| Équilibre | LLM_EFFORT=medium, MAX_CONTEXT_TOKENS=1200 |
+| Qualité maximale | LLM_THINKING=adaptive, LLM_EFFORT=high, contexte plus large |
+
+
+## 11. Tests
 
 ```
 make test
 ```
 
-Les tests du découpage et du pipeline (formatage du contexte, attribution des
-citations, validation des requêtes, endpoint /health) s'exécutent sans base
-PostgreSQL ni clé Claude, grâce à des doublures et au transport ASGI en
-mémoire.
+Les tests du découpage, du pipeline (formatage du contexte, attribution des
+citations, validation des requêtes, endpoint /health) et de l'optimisation des
+tokens (budget de contexte, cache de réponses) s'exécutent sans base PostgreSQL
+ni clé Claude, grâce à des doublures et au transport ASGI en mémoire.
 
 
-## 11. Dépannage
+## 12. Dépannage
 
 - Erreur de dimension à l'insertion : la valeur EMBEDDING_DIM ne correspond pas
   au modèle d'embeddings. Aligner les deux et recréer la base.
@@ -301,7 +380,7 @@ mémoire.
   téléchargé puis mis en cache.
 
 
-## 12. Pistes d'amélioration
+## 13. Pistes d'amélioration
 
 - Reranking des chunks récupérés avant génération.
 - Recherche hybride (lexicale et vectorielle).

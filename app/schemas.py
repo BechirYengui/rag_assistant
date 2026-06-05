@@ -55,8 +55,18 @@ class SourceChunk(BaseModel):
     content: str
 
 
+class Usage(BaseModel):
+    """Claude token usage billed for this request (all zero on a cache hit)."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+
 class QueryResponse(BaseModel):
     question: str
     answer: str
     sources: list[SourceChunk]
     model: str
+    usage: Usage = Field(default_factory=Usage)
+    cached: bool = False

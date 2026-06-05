@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.embeddings import get_embedding_provider
 from app.models import Chunk, Document
+from app.tokens import estimate_tokens
 
 
 @dataclass
@@ -73,3 +74,25 @@ async def retrieve(
             )
         )
     return results
+
+
+def fit_to_budget(
+    chunks: list[RetrievedChunk], max_tokens: int | None = None
+) -> list[RetrievedChunk]:
+    """Keep the highest-ranked chunks that fit within a token budget.
+
+    Chunks arrive sorted by descending similarity. We add them until the next
+    one would exceed ``max_context_tokens``, capping the input cost sent to
+    Claude. The single most relevant chunk is always kept, even if it alone is
+    over budget, so a question is never answered with empty context.
+    """
+    budget = max_tokens if max_tokens is not None else settings.max_context_tokens
+    kept: list[RetrievedChunk] = []
+    total = 0
+    for chunk in chunks:
+        cost = estimate_tokens(chunk.content)
+        if kept and total + cost > budget:
+            break
+        kept.append(chunk)
+        total += cost
+    return kept

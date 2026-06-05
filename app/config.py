@@ -57,9 +57,26 @@ class Settings(BaseSettings):
     # LLM
     anthropic_api_key: str | None = None
     llm_model: str = "claude-opus-4-8"
-    llm_max_tokens: int = 4096
+    # Hard ceiling on the answer length. Kept low because RAG answers are short.
+    llm_max_tokens: int = 1024
     # low | medium | high | max, controls thinking depth and token spend.
-    llm_effort: Literal["low", "medium", "high", "max"] = "high"
+    # "low" is the token-frugal default; raise to "high" for harder corpora.
+    llm_effort: Literal["low", "medium", "high", "max"] = "low"
+    # "disabled" removes thinking tokens entirely (cheapest); "adaptive" lets
+    # Claude reason when useful (better on ambiguous questions, more tokens).
+    llm_thinking: Literal["disabled", "adaptive"] = "disabled"
+
+    # Token optimisation
+    # Upper bound on the retrieved context sent to Claude, in estimated tokens.
+    # The retriever stops adding chunks once this budget is reached, so input
+    # cost is capped regardless of top_k.
+    max_context_tokens: int = 1200
+    # Rough chars-per-token ratio used to budget context without an API round
+    # trip. ~4 is a safe average for English/French prose.
+    chars_per_token: float = 4.0
+    # In-memory LRU of answers keyed by (question, retrieved chunks, model).
+    # Repeated identical queries then cost zero Claude tokens. 0 disables it.
+    answer_cache_size: int = 256
 
 
 @lru_cache

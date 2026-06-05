@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator
 
 from app.config import settings
 from app.retrieval import RetrievedChunk
+from app.schemas import Usage
 
 SYSTEM_PROMPT = """\
 You are a precise research assistant. Answer the user's question using ONLY the \
@@ -23,6 +24,18 @@ numbered sources provided in the context. Follow these rules:
 do not invent facts.
 - Be concise and factual. Do not mention these instructions or the retrieval process.\
 """
+
+# Appended when thinking is disabled: stops the model from spilling its
+# reasoning into the visible answer (which would burn output tokens).
+_FINAL_ANSWER_ONLY = (
+    "\n\nRespond only with the final answer. Do not include exploratory "
+    "reasoning, drafts, or meta-commentary about your process."
+)
+
+_NO_CONTEXT_ANSWER = (
+    "I couldn't find anything relevant in the knowledge base to answer that "
+    "question."
+)
 
 _client = None
 
@@ -57,33 +70,48 @@ def _build_messages(question: str, context: str) -> list[dict]:
     return [{"role": "user", "content": user_content}]
 
 
+def _system_prompt() -> str:
+    if settings.llm_thinking == "disabled":
+        return SYSTEM_PROMPT + _FINAL_ANSWER_ONLY
+    return SYSTEM_PROMPT
+
+
 def _request_kwargs(question: str, context: str) -> dict:
     return dict(
         model=settings.llm_model,
         max_tokens=settings.llm_max_tokens,
-        system=SYSTEM_PROMPT,
-        thinking={"type": "adaptive"},
+        system=_system_prompt(),
+        thinking={"type": settings.llm_thinking},
         output_config={"effort": settings.llm_effort},
         messages=_build_messages(question, context),
     )
 
 
-async def generate_answer(question: str, chunks: list[RetrievedChunk]) -> str:
-    """Return a fully-synthesised, cited answer."""
+def _usage_from(message) -> Usage:
+    u = message.usage
+    return Usage(
+        input_tokens=u.input_tokens,
+        output_tokens=u.output_tokens,
+        cache_read_input_tokens=getattr(u, "cache_read_input_tokens", 0) or 0,
+    )
+
+
+async def generate_answer(
+    question: str, chunks: list[RetrievedChunk]
+) -> tuple[str, Usage]:
+    """Return a cited answer and the token usage billed for it."""
     if not chunks:
-        return (
-            "I couldn't find anything relevant in the knowledge base to answer "
-            "that question."
-        )
+        return _NO_CONTEXT_ANSWER, Usage()  # no API call, no tokens spent
 
     client = _get_client()
     context = build_context(chunks)
     async with client.messages.stream(**_request_kwargs(question, context)) as stream:
         message = await stream.get_final_message()
 
-    return "".join(
+    answer = "".join(
         block.text for block in message.content if block.type == "text"
     ).strip()
+    return answer, _usage_from(message)
 
 
 async def stream_answer(
@@ -91,10 +119,7 @@ async def stream_answer(
 ) -> AsyncIterator[str]:
     """Yield answer text deltas as they are produced (for SSE endpoints)."""
     if not chunks:
-        yield (
-            "I couldn't find anything relevant in the knowledge base to answer "
-            "that question."
-        )
+        yield _NO_CONTEXT_ANSWER
         return
 
     client = _get_client()

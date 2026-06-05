@@ -10,8 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.llm import stream_answer
-from app.rag import _to_sources, answer_question
-from app.retrieval import retrieve
+from app.rag import _to_sources, answer_question, retrieve_context
 from app.schemas import QueryRequest, QueryResponse
 
 router = APIRouter(prefix="/query", tags=["query"])
@@ -40,7 +39,7 @@ async def query_stream(
     The first event carries the retrieved ``sources``; subsequent ``token``
     events carry answer deltas; a final ``done`` event closes the stream.
     """
-    chunks = await retrieve(
+    chunks = await retrieve_context(
         session,
         payload.question,
         top_k=payload.top_k,
