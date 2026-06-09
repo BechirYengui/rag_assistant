@@ -60,3 +60,49 @@ async def test_query_validation_rejects_empty_question():
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
         resp = await client.post("/query", json={"question": ""})
     assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_readiness_ok_when_db_reachable(monkeypatch):
+    async def reachable():
+        return True
+
+    monkeypatch.setattr("app.main._database_reachable", reachable)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        resp = await client.get("/health/ready")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_readiness_503_when_db_unreachable(monkeypatch):
+    async def unreachable():
+        return False
+
+    monkeypatch.setattr("app.main._database_reachable", unreachable)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        resp = await client.get("/health/ready")
+    assert resp.status_code == 503
+    assert resp.json()["database"] == "unreachable"
+
+
+@pytest.mark.asyncio
+async def test_query_returns_503_when_api_key_missing(monkeypatch):
+    # Retrieval succeeds and yields context, but no Claude key is configured:
+    # the opaque 500 must become a clean 503 with an actionable message.
+    import app.llm as llm
+
+    async def fake_retrieve_context(*args, **kwargs):
+        return [_chunk(0, "Some relevant fact.", 0.9)]
+
+    monkeypatch.setattr("app.rag.retrieve_context", fake_retrieve_context)
+    monkeypatch.setattr(llm.settings, "anthropic_api_key", None, raising=False)
+    monkeypatch.setattr(llm, "_client", None, raising=False)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        resp = await client.post("/query", json={"question": "What is up?"})
+    assert resp.status_code == 503
+    assert "ANTHROPIC_API_KEY" in resp.json()["detail"]

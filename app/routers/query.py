@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.llm import stream_answer
+from app.llm import ensure_available, stream_answer
 from app.rag import _to_sources, answer_question, retrieve_context
 from app.schemas import QueryRequest, QueryResponse
 
@@ -46,6 +46,10 @@ async def query_stream(
         min_similarity=payload.min_similarity,
         document_ids=payload.document_ids,
     )
+    # Surface a missing API key as a clean 503 before the stream opens; once the
+    # SSE response has started, an error can no longer change the status code.
+    if chunks:
+        ensure_available()
 
     async def event_stream():
         sources = [s.model_dump(mode="json") for s in _to_sources(chunks)]

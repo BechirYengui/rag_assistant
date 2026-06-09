@@ -37,6 +37,14 @@ _NO_CONTEXT_ANSWER = (
     "question."
 )
 
+class LLMConfigurationError(RuntimeError):
+    """The LLM client cannot be built (e.g. the API key is missing).
+
+    Subclasses ``RuntimeError`` for backward compatibility; surfaced by the API
+    as a clean ``503`` rather than an opaque ``500``.
+    """
+
+
 _client = None
 
 
@@ -45,11 +53,20 @@ def _get_client():
     global _client
     if _client is None:
         if not settings.anthropic_api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY is not configured")
+            raise LLMConfigurationError("ANTHROPIC_API_KEY is not configured")
         from anthropic import AsyncAnthropic
 
         _client = AsyncAnthropic(api_key=settings.anthropic_api_key)
     return _client
+
+
+def ensure_available() -> None:
+    """Fail fast with ``LLMConfigurationError`` if the LLM cannot be reached.
+
+    Lets the streaming endpoint validate readiness *before* the response starts,
+    so the error becomes a clean ``503`` instead of breaking mid-stream.
+    """
+    _get_client()
 
 
 def build_context(chunks: list[RetrievedChunk]) -> str:

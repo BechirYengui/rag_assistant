@@ -29,6 +29,13 @@ services:
       LLM_MODEL: ${LLM_MODEL:-claude-opus-4-8}
     ports:
       - "8000:8000"
+    healthcheck:
+      # Reports healthy only once the database is reachable (readiness probe).
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/ready').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     volumes:
       # Persist the downloaded fastembed model between runs.
       - fastembed-cache:/root/.cache

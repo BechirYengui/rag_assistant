@@ -210,7 +210,8 @@ Liste des endpoints :
 | DELETE | /documents/{id} | Suppression d'un document et de ses chunks |
 | POST | /query | Question, réponse sourcée en JSON |
 | POST | /query/stream | Question, réponse en streaming (SSE) |
-| GET | /health | Statut et configuration active |
+| GET | /health | Liveness et configuration active (toujours 200) |
+| GET | /health/ready | Readiness : 200 si la base est joignable, sinon 503 |
 
 Exemple d'ingestion d'un texte :
 
@@ -385,9 +386,10 @@ make test
 ```
 
 Les tests couvrent le découpage, le pipeline (formatage du contexte,
-attribution des citations, validation des requêtes, endpoint /health),
-l'optimisation des tokens (budget de contexte, cache de réponses) et le
-reranking (sélection MMR, empreinte d'ingestion). Ils s'exécutent sans base
+attribution des citations, validation des requêtes, endpoints /health et
+/health/ready, erreur 503 quand la clé Claude manque), l'optimisation des
+tokens (budget de contexte, cache de réponses) et le reranking (sélection MMR,
+empreinte d'ingestion). Ils s'exécutent sans base
 PostgreSQL ni clé Claude, grâce à des doublures et au transport ASGI en
 mémoire.
 
@@ -396,8 +398,9 @@ mémoire.
 
 - Erreur de dimension à l'insertion : la valeur EMBEDDING_DIM ne correspond pas
   au modèle d'embeddings. Aligner les deux et recréer la base.
-- 500 sur /query avec un message sur ANTHROPIC_API_KEY : la clé Claude n'est pas
-  renseignée dans l'environnement.
+- 503 sur /query avec un message sur ANTHROPIC_API_KEY : la clé Claude n'est pas
+  renseignée dans l'environnement. L'API renvoie un code 503 explicite (et non
+  une erreur 500 opaque) tant que la clé manque.
 - La base ne démarre pas : vérifier que le port 5432 est libre et que Docker
   est lancé.
 - Le premier appel est lent : au premier usage, le modèle d'embeddings local est
