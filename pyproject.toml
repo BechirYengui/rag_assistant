@@ -15,3 +15,6 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+# B008 fires on FastAPI's `Depends(...)` / `File(...)` default-argument idiom,
+# which is intentional and recommended by FastAPI; ignore it project-wide.
+ignore = ["B008"]

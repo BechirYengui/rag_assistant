@@ -344,8 +344,12 @@ d'environnement.
 5. Cache de réponses (ANSWER_CACHE_SIZE, défaut 256). Un cache LRU en mémoire,
    indexé par (question, chunks récupérés, configuration du modèle), renvoie la
    réponse déjà calculée sans appeler Claude. Une question identique reposée
-   coûte alors zéro token. Mettre 0 pour le désactiver. En production multi
-   worker, remplacer par un cache partagé (Redis) derrière la même interface.
+   coûte alors zéro token. Le cache couvre les deux endpoints : `/query` comme
+   `/query/stream`. Sur l'endpoint streaming, un hit rejoue la réponse stockée
+   (événement `done` avec `cached: true`) ; une réponse générée en streaming est
+   réassemblée puis mise en cache, donc partagée avec l'endpoint synchrone.
+   Mettre 0 pour le désactiver. En production multi worker, remplacer par un
+   cache partagé (Redis) derrière la même interface.
 
 6. Mesure du coût. Chaque réponse de l'API expose un objet usage
    (input_tokens, output_tokens, cache_read_input_tokens) et un booléen cached.

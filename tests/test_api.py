@@ -89,6 +89,67 @@ async def test_readiness_503_when_db_unreachable(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stream_serves_cached_answer_without_calling_claude(monkeypatch):
+    # A cache hit on /query/stream must replay the stored answer and never touch
+    # the LLM, so a repeated streamed question costs zero Claude tokens.
+    from app.cache import answer_cache
+    from app.rag import _cache_key
+
+    chunks = [_chunk(0, "Some relevant fact.", 0.9)]
+
+    async def fake_retrieve_context(*args, **kwargs):
+        return chunks
+
+    async def exploding_stream(*args, **kwargs):
+        raise AssertionError("stream_answer must not be called on a cache hit")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr("app.routers.query.retrieve_context", fake_retrieve_context)
+    monkeypatch.setattr("app.routers.query.stream_answer", exploding_stream)
+    answer_cache.set(_cache_key("Cached question?", chunks), "A cached answer [1].")
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        resp = await client.post("/query/stream", json={"question": "Cached question?"})
+
+    assert resp.status_code == 200
+    body = resp.text
+    assert "A cached answer [1]." in body
+    assert '"cached": true' in body
+
+
+@pytest.mark.asyncio
+async def test_stream_caches_generated_answer(monkeypatch):
+    # On a cache miss, the streamed tokens must be reassembled and stored so the
+    # next identical streamed (or synchronous) query is a free cache hit.
+    from app.cache import answer_cache
+    from app.rag import _cache_key
+
+    chunks = [_chunk(0, "Some relevant fact.", 0.9)]
+    key = _cache_key("Fresh question?", chunks)
+    answer_cache._store.pop(key, None)  # ensure a miss
+
+    async def fake_retrieve_context(*args, **kwargs):
+        return chunks
+
+    async def fake_stream(*args, **kwargs):
+        for token in ("Hello ", "world", " [1]."):
+            yield token
+
+    monkeypatch.setattr("app.routers.query.retrieve_context", fake_retrieve_context)
+    monkeypatch.setattr("app.routers.query.stream_answer", fake_stream)
+    monkeypatch.setattr("app.routers.query.ensure_available", lambda: None)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        resp = await client.post("/query/stream", json={"question": "Fresh question?"})
+
+    assert resp.status_code == 200
+    assert '"cached": false' in resp.text
+    assert answer_cache.get(key) == "Hello world [1]."
+
+
+@pytest.mark.asyncio
 async def test_query_returns_503_when_api_key_missing(monkeypatch):
     # Retrieval succeeds and yields context, but no Claude key is configured:
     # the opaque 500 must become a clean 503 with an actionable message.

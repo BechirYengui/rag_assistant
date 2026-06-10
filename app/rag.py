@@ -16,6 +16,11 @@ from app.schemas import QueryResponse, SourceChunk, Usage
 logger = logging.getLogger("rag")
 
 
+def _cache_key(question: str, chunks: list[RetrievedChunk]) -> str:
+    """Cache key for an answer: the question plus the exact retrieved chunks."""
+    return answer_cache.make_key(question, [str(c.chunk_id) for c in chunks])
+
+
 def _to_sources(chunks: list[RetrievedChunk]) -> list[SourceChunk]:
     return [
         SourceChunk(
@@ -73,7 +78,7 @@ async def answer_question(
     )
     sources = _to_sources(chunks)
 
-    cache_key = answer_cache.make_key(question, [str(c.chunk_id) for c in chunks])
+    cache_key = _cache_key(question, chunks)
     cached = answer_cache.get(cache_key)
     if cached is not None:
         logger.info("answer cache hit (0 tokens)")
